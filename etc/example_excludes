@@ -1,0 +1,20 @@
+syntax: regexp
+workspace.xml
+ve/
+build/
+.hg/
+.git/
+.pyc
+\.git
+\.bak
+\.idx
+\.orig
+\.sqlite3
+\.tmp
+\.vep
+~
+\.swp
+\.DS_Store
+.*jb_bak__.*
+.*jb_old__.*
+.idea/
