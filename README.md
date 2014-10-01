@@ -3,9 +3,22 @@ CodeSync
 
 Uses the watchdog python library to rsync a directory to a server on filesystem changes.
 
+Install
+========
+
+    $ pip install codesync
+
+Example
+========
+
+    $ csync /my/code server:my/code -x etc/example_excludes
+
+If you're on a Mac and want to play a beep after the sync finishes, use **-c 'afplay /System/Library/Sounds/Morse.aiff'**
+
 
 Usage
 ======
+
 
     $ csync -h
     usage: csync [-h] [-x EXCLUDE_FROM] [-p PATTERNS] [-c CALLBACK] src dest
@@ -27,6 +40,11 @@ Usage
                             you're on a mac, you can play a sound with: `-c
                             'afplay /System/Library/Sounds/Morse.aiff'`
 
+
+Requirements
+=============
+
+watchdog
 
 Alternatives
 ============

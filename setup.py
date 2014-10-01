@@ -13,7 +13,7 @@ setup(
     maintainer_email="egafni@gmail.com",
     license="GPLv2",
     install_requires=["watchdog", ],
-    scripts=["bin/csync"],
+    scripts=["bin/codesync"],
     data_files=[('etc', ['etc/example_excludes'])],
     # Packaging Instructions
     packages=find_packages(),

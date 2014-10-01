@@ -1,69 +1,86 @@
 #!/usr/bin/env python
+"""
+example: codesync -m "*.py" ~/projects guanine:,1-compute: -c 'afplay /System/Library/Sounds/Morse.aiff'
+"""
 import time
 import logging
 import subprocess as sp
 import fnmatch
 import re
 import os
+from functools import partial
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-def rsync(src, dest, exclude_from, callback):
-    ex = ' --exclude-from="%s"' % exclude_from if exclude_from else ''
-    cmd = "rsync -avP%s %s %s" % (ex, src, dest)
+def add_match_patterns_to_rsync_args(match_patterns, rsync_args):
+    rsync_args = [rsync_args] if rsync_args else []
+    patterns = ["--include '*/'", "--exclude '*'"] + ["--include '%s'" % p for p in match_patterns]
+    patterns = []
+    return ' ' + ' '.join(patterns + rsync_args)
+
+
+def rsync(source, destination, rsync_args, callback=None, ):
+    """
+    """
+    cmd = "rsync %s %s %s" % (rsync_args, source, destination)
     logging.info(cmd)
-    logging.debug(sp.check_output(cmd, shell=True, preexec_fn=os.setpgrp))
+    logging.debug('rsync output: ' + sp.check_output(cmd, shell=True, preexec_fn=os.setpgrp))
 
     if callback:
-        logging.info('running callback:' + callback)
+        logging.debug('running callback:' + callback)
         logging.debug(sp.check_output(callback, shell=True, preexec_fn=os.setpgrp))
-
 class RsyncEventHandler(FileSystemEventHandler):
     """
-    rsyncs on any event
     """
-
-    def __init__(self, src, dest, exclude_from, callback, patterns, *args, **kwargs):
-        self.params = dict(src=os.path.abspath(src), dest=dest, exclude_from=exclude_from,
-                           callback=callback, pattern_reg=fnmatch.translate(patterns))
+    def __init__(self, run_rsync, source, destinations, match_patterns, ignore_patterns, *args, **kwargs):
+        self.pattern_regs  = [fnmatch.translate(p) for p in match_patterns]
+        self.ignore_regs  = [fnmatch.translate(p) for p in ignore_patterns]
+        self.source = source
+        self.run_rsync = run_rsync
+        self.destinations = destinations
         super(RsyncEventHandler, self).__init__(*args, **kwargs)
 
     def on_any_event(self, event):
-        if (re.search(self.params['pattern_reg'], event.src_path) or os.path.isdir(event.src_path)) and event.event_type in ['modified', 'created']:
-            logging.info(event)
-            rel_to_src = os.path.relpath(event.src_path, self.params['src'])
-            dest = os.path.join(self.params['dest'], rel_to_src)
-            #logging.info([(event.src_path, dest, self.params['exclude_from'], self.params['callback'])])
-            rsync(event.src_path, dest, self.params['exclude_from'], self.params['callback'])
+        is_match = any(re.search(p, event.src_path) for p in self.pattern_regs)
+        is_match = is_match and not any(re.search(p, event.src_path) for p in self.ignore_regs)
+        #is_dir = os.path.isdir(event.src_path)
+        if (is_match and event.event_type in ['modified', 'created']): # or (is_dir and event.event_type == 'created'):
+            #if (is_dir and event.event_type == 'modified'):
+            logging.info('Syncing %s ' % event)
+            rel_to_src = os.path.relpath(event.src_path, os.path.dirname(self.source))
+            for d in self.destinations:
+                if d.endswith(':'):
+                    # user intended a relative path to their remote home directory
+                    d += rel_to_src
+                else:
+                    d = os.path.join(d, rel_to_src)
+                # s= event.src_path
+                s = os.path.join(os.path.dirname(self.source), rel_to_src)
+                self.run_rsync(s, d)
+            logging.info('Sync done')
 
+        else:
+            logging.debug('Not syncing %s' % event)
 
-if __name__ == "__main__":
-    import argparse
+def main(source, destinations, rsync_args, match_patterns, ignore_patterns, verbose, callback):
+    destinations = destinations.split(',')
+    match_patterns = match_patterns.split(',')
+    rsync_args = add_match_patterns_to_rsync_args(match_patterns, rsync_args)
+    run_rsync = partial(rsync, rsync_args=rsync_args, callback=callback)
 
-    p = argparse.ArgumentParser()
-    p.add_argument('src')
-    p.add_argument('dest')
-    p.add_argument('-x', '--exclude_from', help='a file containing patterns to exclude from.  Passed to rsyncs `exclude-from` argument.', default=None)
-    p.add_argument('-p', '--patterns', help='semi-colon separated list of patterns that trigger an rsync (default is `*.py`)', default='*.py')
-    p.add_argument('-v', '--verbose', action='store_true', help='logs debug-level information')
-    p.add_argument('-c', '--callback',
-                   help="Executes this string after each rsync.  For example, if you're on a mac, you can play a sound with: "
-                        "`-c 'afplay /System/Library/Sounds/Morse.aiff'`")
-    args = p.parse_args()
+    logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, format='%(asctime)s %(levelname)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
-
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
-                        format='%(asctime)s %(levelname)s: %(message)s',
-                        datefmt='%Y-%m-%d %H:%M:%S')
-
-
-    event_handler = RsyncEventHandler(args.src, args.dest, args.exclude_from, args.callback, patterns=args.patterns)
+    event_handler = RsyncEventHandler(run_rsync, source, destinations, match_patterns,ignore_patterns)
     observer = Observer()
-    observer.schedule(event_handler, args.src, recursive=True)
+    observer.schedule(event_handler, source, recursive=True)
     observer.start()
+
+
     logging.info('Sync started')
-    rsync(args.src, args.dest, args.exclude_from, args.callback)
+    # if not skip_initial_sync:
+    #     for d in destinations:
+    #         run_rsync(source, d)
 
     try:
         while True:
@@ -71,3 +88,22 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         observer.stop()
     observer.join()
+
+
+if __name__ == "__main__":
+    import argparse
+
+    p = argparse.ArgumentParser()
+    p.add_argument('source', help='source directory to recursively watch')
+    p.add_argument('destinations', help='comma separated list of destinations to rsync to.  ex: server1:projects,server2:/data')
+    p.add_argument('-r', '--rsync_args', help='arguments to pass to rsync', default='-aP')
+    p.add_argument('-m', '--match_patterns', help="semi-colon separated list of glob match_patterns that trigger an rsync (default is `*.py`).  "
+                                            "These glob match_patterns are also passed to rsync's --include argument", default='*.py')
+    p.add_argument('-v', '--verbose', action='store_true', help='logs debug-level information')
+    p.add_argument('-i', '--ignore_patterns', action='store_true', help='After matching, ignore these glob patterns.  Comma separated.', default='*.hg*,*.git*')
+    # p.add_argument('-s', '--skip_initial_sync', action='store_true', help="Skips the initial rsync of the source to destinations.  Will only sync files as they change.")
+    p.add_argument('-c', '--callback',
+                   help="Executes this string after each rsync.  For example, if you're on a mac, you can play a sound with: "
+                        "`-c 'afplay /System/Library/Sounds/Morse.aiff'`")
+    args = p.parse_args()
+    main(**vars(args))
