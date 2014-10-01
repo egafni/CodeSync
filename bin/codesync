@@ -1,0 +1,73 @@
+#!/usr/bin/env python
+import time
+import logging
+import subprocess as sp
+import fnmatch
+import re
+import os
+
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+def rsync(src, dest, exclude_from, callback):
+    ex = ' --exclude-from="%s"' % exclude_from if exclude_from else ''
+    cmd = "rsync -avP%s %s %s" % (ex, src, dest)
+    logging.info(cmd)
+    logging.debug(sp.check_output(cmd, shell=True, preexec_fn=os.setpgrp))
+
+    if callback:
+        logging.info('running callback:' + callback)
+        logging.debug(sp.check_output(callback, shell=True, preexec_fn=os.setpgrp))
+
+class RsyncEventHandler(FileSystemEventHandler):
+    """
+    rsyncs on any event
+    """
+
+    def __init__(self, src, dest, exclude_from, callback, patterns, *args, **kwargs):
+        self.params = dict(src=os.path.abspath(src), dest=dest, exclude_from=exclude_from,
+                           callback=callback, pattern_reg=fnmatch.translate(patterns))
+        super(RsyncEventHandler, self).__init__(*args, **kwargs)
+
+    def on_any_event(self, event):
+        if (re.search(self.params['pattern_reg'], event.src_path) or os.path.isdir(event.src_path)) and event.event_type in ['modified', 'created']:
+            logging.info(event)
+            rel_to_src = os.path.relpath(event.src_path, self.params['src'])
+            dest = os.path.join(self.params['dest'], rel_to_src)
+            #logging.info([(event.src_path, dest, self.params['exclude_from'], self.params['callback'])])
+            rsync(event.src_path, dest, self.params['exclude_from'], self.params['callback'])
+
+
+if __name__ == "__main__":
+    import argparse
+
+    p = argparse.ArgumentParser()
+    p.add_argument('src')
+    p.add_argument('dest')
+    p.add_argument('-x', '--exclude_from', help='a file containing patterns to exclude from.  Passed to rsyncs `exclude-from` argument.', default=None)
+    p.add_argument('-p', '--patterns', help='semi-colon separated list of patterns that trigger an rsync (default is `*.py`)', default='*.py')
+    p.add_argument('-v', '--verbose', action='store_true', help='logs debug-level information')
+    p.add_argument('-c', '--callback',
+                   help="Executes this string after each rsync.  For example, if you're on a mac, you can play a sound with: "
+                        "`-c 'afplay /System/Library/Sounds/Morse.aiff'`")
+    args = p.parse_args()
+
+
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
+                        format='%(asctime)s %(levelname)s: %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S')
+
+
+    event_handler = RsyncEventHandler(args.src, args.dest, args.exclude_from, args.callback, patterns=args.patterns)
+    observer = Observer()
+    observer.schedule(event_handler, args.src, recursive=True)
+    observer.start()
+    logging.info('Sync started')
+    rsync(args.src, args.dest, args.exclude_from, args.callback)
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
